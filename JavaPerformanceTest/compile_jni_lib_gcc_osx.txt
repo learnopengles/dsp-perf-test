@@ -1,0 +1,1 @@
+g++ ../AndroidPerformanceTest/jni/dsp.cpp ../AndroidPerformanceTest/jni/PerformanceTest.cpp -march=native -std=c++11 -O3 -ffast-math -Wa,-q -dynamiclib -o libPerformanceTest.jnilib

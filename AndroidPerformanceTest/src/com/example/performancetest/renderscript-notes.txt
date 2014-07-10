@@ -1,0 +1,148 @@
+/*******************************************************************************
+ * Copyright 2014 See AUTHORS file.
+ * 
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ ******************************************************************************/
+	// If using Renderscript to test the DSP code directly, without passing in
+	// audio data, there are different ways it could be done, as below:
+	
+	private static final int LENGTH = 524288;
+
+	private final short[] inData = new short[LENGTH];
+	private final short[] outData = new short[LENGTH];
+
+	// Renderscript conversion note: We're showing four variations of how
+	// to invoke the Renderscript code.  The first one is naive, the second
+	// one typical, the third more advanced, and the fourth one is an example
+	// of what can be achieved for some (but not this) algorithm.
+	private long doRenderscriptTest(Context context) {
+	    // Renderscript conversion note: Typically, there's only one
+	    // RenderScript object per application.  It's a long lived object that
+	    // is kept around.
+    	RenderScript rs = RenderScript.create(context);
+	  
+		final long startTimeNs = System.nanoTime();
+		long endTimeNs = startTimeNs + 5000000000L;
+		
+		int iterations = 0;
+		while (System.nanoTime() < endTimeNs) {
+			DspRenderscript.applyLowpass(inData, outData, LENGTH, rs);
+			iterations++;
+		}
+
+		final long elapsedTimeNs = System.nanoTime() - startTimeNs;
+		final long shortsPerSecond = (long) ((iterations * (long)LENGTH) / (elapsedTimeNs / 1000000000.0));
+		
+		rs.destroy();
+		return shortsPerSecond;
+	}
+
+	private long doBetterRenderscriptTest(Context context) {
+      	RenderScript rs = RenderScript.create(context);
+      	// Renderscript conversion note: There's no reason to keep recreating
+      	// the script and the allocations at each iteration.
+      	ScriptC_LowPassFilter filterScript = new ScriptC_LowPassFilter(rs);
+      	Allocation inAllocation = Allocation.createSized(rs, Element.I16(rs), LENGTH);   
+      	Allocation outAllocation = Allocation.createSized(rs, Element.I16(rs), LENGTH);
+
+      	final long startTimeNs = System.nanoTime();
+      	long endTimeNs = startTimeNs + 5000000000L;
+	      
+      	int iterations = 0;
+	   	while (System.nanoTime() < endTimeNs) {
+          	inAllocation.copyFrom(inData);
+          	DspRenderscript.applyJustLowpass(inAllocation, outAllocation, LENGTH, filterScript);
+          	outAllocation.copyTo(outData);
+          	iterations++;
+	    }
+
+	    final long elapsedTimeNs = System.nanoTime() - startTimeNs;
+	    final long shortsPerSecond = (long) ((iterations * (long)LENGTH) / (elapsedTimeNs / 1000000000.0));
+	      
+	    rs.destroy();
+	    return shortsPerSecond;
+  	}
+	  
+    private long doNoCopyRenderscriptTest(Context context) {
+      	RenderScript rs = RenderScript.create(context);
+      	Allocation inAllocation = Allocation.createSized(rs, Element.I16(rs), LENGTH);
+      	Allocation outAllocation = Allocation.createSized(rs, Element.I16(rs), LENGTH);
+      	ScriptC_LowPassFilter filterScript = new ScriptC_LowPassFilter(rs);
+
+      	// Renderscript conversion note: Copying the data in and out of the
+      	// allocations can take quite a bit of time.  If our application let us
+      	// work directly from Allocation, this would be faster.
+      	//
+      	// Avoiding copies is fairly easy to do for bitmaps in Java.  When
+      	// invoking Renderscript form native code, a "usage_shared" flag can be
+      	// used to avoid copying other types of buffer.  Here, we simulate this
+      	// by moving the copyFrom out of the loop and removing the copyTo.  
+
+      	inAllocation.copyFrom(inData);
+      
+      	final long startTimeNs = System.nanoTime();
+      	long endTimeNs = startTimeNs + 5000000000L;
+      
+      	int iterations = 0;
+      	while (System.nanoTime() < endTimeNs) {
+          	DspRenderscript.applyJustLowpass(inAllocation, outAllocation, LENGTH, filterScript);
+          	iterations++;
+      	}
+
+      	final long elapsedTimeNs = System.nanoTime() - startTimeNs;
+      	final long shortsPerSecond = (long) ((iterations * (long)LENGTH) / (elapsedTimeNs / 1000000000.0));
+      
+      	rs.destroy();
+      	return shortsPerSecond;
+  	}
+  
+    private long doParallelButIncorrectRenderscriptTest(Context context) {
+      	RenderScript rs = RenderScript.create(context);
+      	Allocation inAllocation = Allocation.createSized(rs, Element.I16(rs), LENGTH);
+      	Allocation outAllocation = Allocation.createSized(rs, Element.I16(rs), LENGTH);
+      	ScriptC_LowPassFilterParallel filterScript = new ScriptC_LowPassFilterParallel(rs);
+
+      	inAllocation.copyFrom(inData);
+      
+      	final long startTimeNs = System.nanoTime();
+      	long endTimeNs = startTimeNs + 5000000000L;
+      
+      	int iterations = 0;
+      	while (System.nanoTime() < endTimeNs) {
+          	// Renderscript conversion note: To show how easy it is to parallelize
+          	// (and get a performance boost) when the algorithm allows it, we show
+          	// here how that would be done.  This is not the right approach for
+          	// this algorithm, as it needs to keep track continuously of the
+          	// context from one short to the next.  This is only for teaching
+          	// purpose.
+          	filterScript.forEach_apply_fast_but_incorrect_pass(inAllocation, outAllocation);
+          	iterations++;
+      	}
+
+      	final long elapsedTimeNs = System.nanoTime() - startTimeNs;
+      	final long shortsPerSecond = (long) ((iterations * (long)LENGTH) / (elapsedTimeNs / 1000000000.0));
+      
+      	rs.destroy();
+      	return shortsPerSecond;
+    }
+    
+    public static void applyLowpass(short[] input, short[] output, int length, RenderScript rs) {
+		Allocation inAllocation = Allocation.createSized(rs, Element.I16(rs), length);   
+		Allocation outAllocation = Allocation.createSized(rs, Element.I16(rs), length);
+		inAllocation.copyFrom(input);
+  
+		ScriptC_LowPassFilter filterScript = new ScriptC_LowPassFilter(rs);
+		filterScript.invoke_apply_lowpass(inAllocation, outAllocation, length);
+	
+		outAllocation.copyTo(output);
+	}
